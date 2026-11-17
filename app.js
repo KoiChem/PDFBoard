@@ -82,8 +82,11 @@ function toast(msg, type = 'info', long = false) {
 /* 確認ダイアログ（仕様19: 既定フォーカスはキャンセル） */
 let modalResolve = null;
 let modalPromise = null;
+/* UIロック中か（処理中 or 確認ダイアログ表示中は新規操作を受け付けない） */
+const uiLocked = () => busy || modalPromise !== null;
+
 function confirmDialog(message) {
-  if (modalPromise) return modalPromise; // 多重表示防止（開いているものを返す）
+  if (modalPromise) return Promise.resolve(false); // 再入は拒否（共有すると1回の承認で複数操作が進む）
   modalPromise = new Promise((resolve) => {
     modalResolve = resolve;
     els.modalMsg.textContent = message;
@@ -233,10 +236,10 @@ function makeSrcPages(src) {
 
 /* 新規に開く（既存の編集は破棄。未保存なら確認） */
 async function openNewPdf(file) {
-  if (busy) return;
+  if (uiLocked()) return;
   if (isDirty()) {
     const ok = await confirmDialog('未保存の変更があります。保存せずに続けますか？');
-    if (!ok) return;
+    if (!ok || busy) return;
   }
   setBusy(true, '読み込み中…');
   try {
@@ -287,7 +290,7 @@ async function appendPdfs(files) {
 
 /* ファイル入力・ドロップ共通の入口 */
 async function handleIncomingFiles(fileList) {
-  if (busy) return;
+  if (uiLocked()) return;
   const files = [...fileList];
   const pdfs = files.filter(isPdfFile);
   if (files.length && !pdfs.length) { toast('PDF以外のファイルは開けません', 'error'); return; }
@@ -492,13 +495,13 @@ els.btnBlank.addEventListener('click', () => {
   insertBlank(idx);
 });
 async function deleteSelected() {
-  if (busy || !selected.size) return;
+  if (uiLocked() || !selected.size) return;
   if (selected.size >= pages.length) {
     toast('全てのページを削除することはできません', 'error');
     return;
   }
   const ok = await confirmDialog(`選択した${selected.size}ページを削除しますか？`);
-  if (!ok) return;
+  if (!ok || busy) return;
   pages = pages.filter((p) => !selected.has(p.id));
   selected = new Set();
   pushHistory();
@@ -530,7 +533,7 @@ async function verifyCount(bytes, expect) {
   if (doc.getPageCount() !== expect) throw new Error('COUNT_MISMATCH');
 }
 async function saveAll() {
-  if (!pages.length || busy) return;
+  if (!pages.length || uiLocked()) return;
   // 保存開始時点の状態で固定する（処理中の編集で保存内容と保存済み判定がずれないように）
   const savePages = JSON.parse(snapshotPages());
   const saveKey = JSON.stringify(savePages);
@@ -548,7 +551,7 @@ async function saveAll() {
   } finally { setBusy(false); }
 }
 async function extractSelected() {
-  if (busy) return;
+  if (uiLocked()) return;
   const sel = JSON.parse(JSON.stringify(selectedPagesInOrder()));
   if (!sel.length) return;
   setBusy(true, '保存中…');
@@ -563,8 +566,9 @@ async function extractSelected() {
   } finally { setBusy(false); }
 }
 async function individualSave() {
+  if (uiLocked()) return;
   const sel = selectedPagesInOrder();
-  if (!sel.length || busy) return;
+  if (!sel.length) return;
   const base = sanitizeName(baseName, 'document');
   const dispNum = new Map(pages.map((p, i) => [p.id, i + 1]));
   /* 出力ファイル一覧を先に決める（CSVありは範囲を1ファイルにまとめる） */
@@ -600,7 +604,7 @@ async function individualSave() {
   const modeNote = csvRules.length ? '\nCSVに従って分割保存します。' : '';
   const ok = await confirmDialog(
     `${outputs.length}ファイルをダウンロードします。${modeNote}\nブラウザが複数ダウンロードの許可を求める場合があります。続けますか？`);
-  if (!ok) return;
+  if (!ok || busy) return;
   // ダイアログ表示中の編集に影響されないよう、出力対象をここで固定する
   const snapOutputs = outputs.map((o) => ({ name: o.name, descs: JSON.parse(JSON.stringify(o.descs)) }));
   setBusy(true, '保存中…');
@@ -845,7 +849,7 @@ function moveFocus(delta) {
 document.addEventListener('keydown', (e) => {
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-  if (busy) return; // 処理中は編集系ショートカットを受け付けない
+  if (uiLocked()) return; // 処理中・ダイアログ表示中は編集系ショートカットを受け付けない
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   else if ((mod && e.key.toLowerCase() === 'y') || (mod && e.shiftKey && e.key.toLowerCase() === 'z')) { e.preventDefault(); redo(); }
