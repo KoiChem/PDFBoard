@@ -1,0 +1,186 @@
+:root {
+  --thumb-w: 150px;
+  --accent: #2563eb;
+  --accent-soft: #dbeafe;
+  --ink: #292524;
+  --muted: #78716c;
+  --line: #e7e5e4;
+  --bg: #f5f5f4;
+  --panel: #ffffff;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover:not(:disabled) { background: #fafaf9; border-color: #d6d3d1; }
+button:disabled { opacity: .45; cursor: default; }
+select, input[type="range"] { font: inherit; }
+select {
+  font-size: 13px; padding: 5px 6px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+}
+
+/* ツールバー */
+#toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  z-index: 20;
+}
+.tb-group { display: flex; align-items: center; gap: 6px; }
+.logo { font-weight: 700; font-size: 16px; margin-right: 4px; letter-spacing: .02em; }
+.tb-label { font-size: 12px; color: var(--muted); }
+#zoom { width: 110px; }
+#zoom-val { font-size: 12px; color: var(--muted); width: 2em; }
+body.busy #toolbar button, body.busy #toolbar select, body.busy #toolbar input { pointer-events: none; opacity: .55; }
+
+/* 進捗 */
+#progress-wrap {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 12px; background: #fffbeb; border-bottom: 1px solid #fde68a;
+  font-size: 12px;
+}
+#progress-bar { flex: 1; height: 8px; background: #fef3c7; border-radius: 4px; overflow: hidden; }
+#progress-fill { height: 100%; width: 0%; background: #f59e0b; transition: width .15s; }
+
+/* ボード */
+#board-wrap { flex: 1; overflow: auto; position: relative; }
+#board {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, var(--thumb-w));
+  gap: 16px;
+  padding: 18px;
+  justify-content: start;
+  align-content: start;
+  align-items: start;
+  min-height: 100%;
+}
+#empty-state {
+  min-height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 40px 20px; text-align: center;
+}
+.empty-icon { font-size: 52px; }
+.empty-main { font-size: 18px; font-weight: 600; margin: 6px 0 0; }
+.empty-sub { color: var(--muted); margin: 0; }
+.empty-note { color: var(--muted); font-size: 12px; margin-top: 14px; }
+#btn-open-empty { margin-top: 10px; padding: 9px 20px; font-size: 14px; }
+
+/* サムネイル */
+.thumb {
+  width: var(--thumb-w);
+  background: var(--panel);
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+  cursor: grab;
+  user-select: none;
+  position: relative;
+  outline: none;
+}
+.thumb:focus-visible { box-shadow: 0 0 0 3px #93c5fd; }
+.thumb.selected { border-color: var(--accent); background: var(--accent-soft); }
+.thumb.dragging { opacity: .4; }
+.thumb.drop-before { box-shadow: -4px 0 0 0 var(--accent); }
+.thumb.drop-after { box-shadow: 4px 0 0 0 var(--accent); }
+.thumb .img-wrap {
+  display: flex; align-items: center; justify-content: center;
+  background: #fafaf9; border-radius: 6px; overflow: hidden;
+  min-height: 60px;
+}
+.thumb img { max-width: 100%; height: auto; display: block; pointer-events: none; }
+.thumb .ph { color: var(--muted); font-size: 12px; padding: 26px 0; }
+.thumb .meta {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 5px; font-size: 12px;
+}
+.thumb .pnum { font-weight: 600; }
+.thumb .badge {
+  font-size: 10px; color: #92400e; background: #fef3c7;
+  border-radius: 6px; padding: 1px 5px;
+}
+.thumb .badge.src { color: #1e40af; background: #dbeafe; }
+
+/* ステータスバー */
+#statusbar {
+  display: flex; gap: 18px; align-items: center;
+  padding: 6px 12px; font-size: 12.5px;
+  background: var(--panel); border-top: 1px solid var(--line);
+  min-height: 32px;
+}
+#st-dirty { margin-left: auto; font-weight: 600; }
+#st-dirty.dirty { color: #b45309; }
+
+/* 右クリックメニュー */
+#context-menu {
+  position: fixed; z-index: 100;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.18);
+  padding: 5px; min-width: 210px;
+}
+#context-menu .mi { padding: 7px 12px; font-size: 13px; border-radius: 6px; cursor: pointer; }
+#context-menu .mi:hover { background: #f5f5f4; }
+#context-menu .mi.danger { color: #b91c1c; }
+#context-menu .sep { height: 1px; background: var(--line); margin: 4px 6px; }
+
+/* ドロップオーバーレイ */
+#drop-overlay {
+  position: fixed; inset: 12px; z-index: 90;
+  border: 3px dashed var(--accent); border-radius: 16px;
+  background: rgba(219, 234, 254, .85);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 700; color: var(--accent);
+  pointer-events: none;
+}
+#drop-overlay[hidden] { display: none; }
+
+/* モーダル */
+#modal-overlay {
+  position: fixed; inset: 0; z-index: 110;
+  background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center;
+}
+#modal-overlay[hidden] { display: none; }
+#modal-box {
+  background: var(--panel); border-radius: 12px; padding: 20px;
+  max-width: 440px; width: calc(100% - 40px);
+  box-shadow: 0 16px 40px rgba(0,0,0,.25);
+}
+#modal-message { margin: 0 0 16px; font-size: 14px; line-height: 1.6; white-space: pre-line; }
+#modal-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+#modal-ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+#modal-ok:hover { background: #1d4ed8; }
+
+/* トースト */
+#toasts {
+  position: fixed; right: 16px; bottom: 44px; z-index: 120;
+  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
+}
+.toast {
+  padding: 10px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+  color: #fff; box-shadow: 0 8px 20px rgba(0,0,0,.2);
+  animation: toast-in .18s ease-out;
+}
+.toast.info { background: #2563eb; }
+.toast.success { background: #15803d; }
+.toast.warn { background: #d97706; }
+.toast.error { background: #b91c1c; }
+@keyframes toast-in { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }

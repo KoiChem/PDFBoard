@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDFBoard — PDFページ編集</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="toolbar">
+  <div class="tb-group">
+    <span class="logo">PDFBoard</span>
+    <button id="btn-open" type="button">ファイルを開く</button>
+    <button id="btn-save" type="button" disabled>保存</button>
+    <button id="btn-extract" type="button" disabled>選択ページを抽出…</button>
+    <button id="btn-individual" type="button" disabled>選択ページを個別保存</button>
+    <button id="btn-csv" type="button" disabled>CSV読込</button>
+  </div>
+  <div class="tb-group">
+    <button id="btn-undo" type="button" disabled>元に戻す</button>
+    <button id="btn-redo" type="button" disabled>やり直し</button>
+  </div>
+  <div class="tb-group">
+    <label class="tb-label" for="blank-size">空白ページ</label>
+    <select id="blank-size">
+      <option value="A4">A4</option>
+      <option value="A3">A3</option>
+      <option value="B5">B5</option>
+      <option value="B4">B4</option>
+      <option value="A5">A5</option>
+      <option value="LETTER">レター</option>
+    </select>
+    <button id="btn-blank" type="button" disabled>空白ページ追加</button>
+  </div>
+  <div class="tb-group">
+    <label class="tb-label" for="zoom">サムネイルサイズ</label>
+    <input id="zoom" type="range" min="90" max="280" step="10" value="150">
+    <span id="zoom-val">中</span>
+  </div>
+  <input id="file-input" type="file" accept=".pdf,application/pdf" hidden>
+  <input id="csv-input" type="file" accept=".csv,text/csv,text/plain" hidden>
+</header>
+
+<div id="progress-wrap" hidden>
+  <div id="progress-bar"><div id="progress-fill"></div></div>
+  <span id="progress-label"></span>
+</div>
+
+<main id="board-wrap">
+  <div id="empty-state">
+    <div class="empty-icon">📄</div>
+    <p class="empty-main">PDFファイルをここにドラッグ＆ドロップ</p>
+    <p class="empty-sub">または、ファイルを開くボタンをクリック</p>
+    <button id="btn-open-empty" type="button">ファイルを開く</button>
+    <p class="empty-note">PDFはこのブラウザの中だけで処理され、外部に送信されません。</p>
+  </div>
+  <div id="board" hidden></div>
+</main>
+
+<footer id="statusbar">
+  <span id="st-file">ファイル未選択</span>
+  <span id="st-pages"></span>
+  <span id="st-selected"></span>
+  <span id="st-csv"></span>
+  <span id="st-dirty"></span>
+</footer>
+
+<div id="context-menu" hidden></div>
+<div id="drop-overlay" hidden>ここにドロップ</div>
+
+<div id="modal-overlay" hidden>
+  <div id="modal-box" role="dialog" aria-modal="true">
+    <p id="modal-message"></p>
+    <div id="modal-buttons">
+      <button id="modal-ok" type="button">OK</button>
+      <button id="modal-cancel" type="button">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="pdf-lib.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
