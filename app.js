@@ -81,17 +81,20 @@ function toast(msg, type = 'info', long = false) {
 }
 /* 確認ダイアログ（仕様19: 既定フォーカスはキャンセル） */
 let modalResolve = null;
+let modalPromise = null;
 function confirmDialog(message) {
-  return new Promise((resolve) => {
+  if (modalPromise) return modalPromise; // 多重表示防止（開いているものを返す）
+  modalPromise = new Promise((resolve) => {
     modalResolve = resolve;
     els.modalMsg.textContent = message;
     els.modalOverlay.hidden = false;
     els.modalCancel.focus();
   });
+  return modalPromise;
 }
 function closeModal(result) {
   els.modalOverlay.hidden = true;
-  if (modalResolve) { modalResolve(result); modalResolve = null; }
+  if (modalResolve) { modalResolve(result); modalResolve = null; modalPromise = null; }
 }
 els.modalOk.addEventListener('click', () => closeModal(true));
 els.modalCancel.addEventListener('click', () => closeModal(false));
@@ -174,8 +177,8 @@ function restoreHistory() {
   renderBoard();
   updateStatus();
 }
-function undo() { if (historyIndex > 0) { historyIndex--; restoreHistory(); } }
-function redo() { if (historyIndex < history.length - 1) { historyIndex++; restoreHistory(); } }
+function undo() { if (busy) return; if (historyIndex > 0) { historyIndex--; restoreHistory(); } }
+function redo() { if (busy) return; if (historyIndex < history.length - 1) { historyIndex++; restoreHistory(); } }
 els.btnUndo.addEventListener('click', undo);
 els.btnRedo.addEventListener('click', redo);
 
@@ -230,6 +233,7 @@ function makeSrcPages(src) {
 
 /* 新規に開く（既存の編集は破棄。未保存なら確認） */
 async function openNewPdf(file) {
+  if (busy) return;
   if (isDirty()) {
     const ok = await confirmDialog('未保存の変更があります。保存せずに続けますか？');
     if (!ok) return;
@@ -412,10 +416,18 @@ function applySelectionDom() {
   });
   updateStatus();
 }
+/* 直近のポインター種別（タッチ判定用） */
+let lastPointerType = 'mouse';
+window.addEventListener('pointerdown', (e) => { lastPointerType = e.pointerType || 'mouse'; }, true);
+
 function onThumbClick(e, id) {
   focusId = id;
   const idx = pages.findIndex((p) => p.id === id);
-  if (e.shiftKey && anchorId !== null) {
+  if (lastPointerType === 'touch' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    // スマホ/タブレット: 修飾キーが無いので、タップは複数選択のトグルにする
+    if (selected.has(id)) selected.delete(id); else selected.add(id);
+    anchorId = id;
+  } else if (e.shiftKey && anchorId !== null) {
     const a = pages.findIndex((p) => p.id === anchorId);
     if (a >= 0) {
       const [s, t] = a < idx ? [a, idx] : [idx, a];
@@ -445,7 +457,7 @@ function selectedPagesInOrder() {
   return pages.filter((p) => selected.has(p.id));
 }
 function rotateSelected(delta) {
-  if (!selected.size) return;
+  if (busy || !selected.size) return;
   for (const p of pages) {
     if (selected.has(p.id)) p.rotDelta = ((p.rotDelta + delta) % 360 + 360) % 360;
   }
@@ -453,7 +465,7 @@ function rotateSelected(delta) {
   renderBoard();
 }
 function duplicateSelected() {
-  if (!selected.size) return;
+  if (busy || !selected.size) return;
   const copies = new Map();
   const out = [];
   for (const p of pages) {
@@ -472,6 +484,7 @@ function duplicateSelected() {
   toast('ページを複製しました', 'success');
 }
 function insertBlank(afterIndex) {
+  if (busy) return;
   const size = els.blankSize.value;
   const bp = { id: nextPageId++, kind: 'blank', rotDelta: 0, blankSize: size };
   const at = Math.max(0, Math.min(afterIndex + 1, pages.length));
@@ -489,7 +502,7 @@ els.btnBlank.addEventListener('click', () => {
   insertBlank(idx);
 });
 async function deleteSelected() {
-  if (!selected.size) return;
+  if (busy || !selected.size) return;
   if (selected.size >= pages.length) {
     toast('全てのページを削除することはできません', 'error');
     return;
@@ -528,12 +541,15 @@ async function verifyCount(bytes, expect) {
 }
 async function saveAll() {
   if (!pages.length || busy) return;
+  // 保存開始時点の状態で固定する（処理中の編集で保存内容と保存済み判定がずれないように）
+  const savePages = JSON.parse(snapshotPages());
+  const saveKey = JSON.stringify(savePages);
   setBusy(true, '保存中…');
   try {
-    const bytes = await buildPdfBytes(pages);
-    await verifyCount(bytes, pages.length);
+    const bytes = await buildPdfBytes(savePages);
+    await verifyCount(bytes, savePages.length);
     downloadBytes(bytes, `${sanitizeName(baseName, 'document')}_edited.pdf`);
-    savedKey = snapshotPages();
+    savedKey = saveKey;
     updateStatus();
     toast('保存しました', 'success');
   } catch (e) {
@@ -542,8 +558,9 @@ async function saveAll() {
   } finally { setBusy(false); }
 }
 async function extractSelected() {
-  const sel = selectedPagesInOrder();
-  if (!sel.length || busy) return;
+  if (busy) return;
+  const sel = JSON.parse(JSON.stringify(selectedPagesInOrder()));
+  if (!sel.length) return;
   setBusy(true, '保存中…');
   try {
     const bytes = await buildPdfBytes(sel);
@@ -578,21 +595,27 @@ async function individualSave() {
     let nm = csvRules.length ? findRuleNameFor(n) : null;
     outputs.push({ descs: [p], name: `${base}_${nm || n}.pdf` });
   }
-  /* ファイル名の衝突回避（_2, _3…） */
-  const seen = new Map();
+  /* ファイル名の衝突回避（_2, _3…）: 生成済みの名前も含めて一意性を再検査する */
+  const usedNames = new Set();
   for (const o of outputs) {
-    if (seen.has(o.name)) {
-      const k = seen.get(o.name) + 1; seen.set(o.name, k);
-      o.name = o.name.replace(/\.pdf$/i, `_${k}.pdf`);
-    } else seen.set(o.name, 1);
+    const stem = o.name.replace(/\.pdf$/i, '');
+    let candidate = o.name;
+    let suffix = 2;
+    while (usedNames.has(candidate.toLowerCase())) {
+      candidate = `${stem}_${suffix++}.pdf`;
+    }
+    usedNames.add(candidate.toLowerCase());
+    o.name = candidate;
   }
   const modeNote = csvRules.length ? '\nCSVに従って分割保存します。' : '';
   const ok = await confirmDialog(
     `${outputs.length}ファイルをダウンロードします。${modeNote}\nブラウザが複数ダウンロードの許可を求める場合があります。続けますか？`);
   if (!ok) return;
+  // ダイアログ表示中の編集に影響されないよう、出力対象をここで固定する
+  const snapOutputs = outputs.map((o) => ({ name: o.name, descs: JSON.parse(JSON.stringify(o.descs)) }));
   setBusy(true, '保存中…');
   try {
-    for (const o of outputs) {
+    for (const o of snapOutputs) {
       const bytes = await buildPdfBytes(o.descs);
       await verifyCount(bytes, o.descs.length);
       downloadBytes(bytes, o.name);
@@ -712,7 +735,11 @@ els.board.addEventListener('contextmenu', (e) => {
   const id = Number(t.dataset.id);
   const idx = pages.findIndex((p) => p.id === id);
   // 選択内なら選択を維持、選択外ならそのページだけを選択（チャップ合意）
-  if (!selected.has(id)) { selectOnly(id); anchorId = id; applySelectionDom(); }
+  // ただしタッチでは複数選択を維持するため、未選択ページは選択に追加する
+  if (!selected.has(id)) {
+    if (lastPointerType === 'touch') { selected.add(id); anchorId = id; applySelectionDom(); }
+    else { selectOnly(id); anchorId = id; applySelectionDom(); }
+  }
   focusId = id;
   showMenu(e.clientX, e.clientY, idx);
 });
@@ -763,7 +790,7 @@ els.board.addEventListener('dragover', (e) => {
   }
 });
 els.board.addEventListener('drop', (e) => {
-  if (!dragIds.length) return;
+  if (!dragIds.length || busy) return;
   e.preventDefault();
   const target = dropIndexFromEvent(e);
   const moving = pages.filter((p) => dragIds.includes(p.id));
@@ -832,6 +859,7 @@ function moveFocus(delta) {
 document.addEventListener('keydown', (e) => {
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (busy) return; // 処理中は編集系ショートカットを受け付けない
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   else if ((mod && e.key.toLowerCase() === 'y') || (mod && e.shiftKey && e.key.toLowerCase() === 'z')) { e.preventDefault(); redo(); }
