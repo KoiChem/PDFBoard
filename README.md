@@ -68,6 +68,10 @@ app.js                アプリ本体（ESモジュール）
 pdf.min.mjs           PDF.js 6.5.438（表示・サムネイル生成）
 pdf.worker.min.mjs    PDF.js ワーカー
 pdf-lib.min.js        pdf-lib 1.17.1（PDF編集・保存）
+cmaps/                PDF.js補助アセット（CIDフォント用CMap、pdfjs-dist 6.5.438公式）
+standard_fonts/       PDF.js補助アセット（非埋め込み標準フォント）
+wasm/                 PDF.js補助アセット（JPEG2000/JBIG2復号・色管理。quickjs-eval は不要のため除外）
+iccs/                 PDF.js補助アセット（ICCプロファイル）
 SPEC.md               仕様書（チャップとの作戦会議で確定した最終仕様）
 ```
 

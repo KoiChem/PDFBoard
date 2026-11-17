@@ -5,6 +5,14 @@
 import * as pdfjsLib from './pdf.min.mjs';
 const { PDFDocument, degrees } = PDFLib;
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./pdf.worker.min.mjs', import.meta.url).href;
+/* PDF.js補助アセット（同梱）: CMap=日本語等CIDフォント / standard_fonts=非埋め込み標準フォント / wasm=JPEG2000・JBIG2画像のデコード */
+const ASSET_PARAMS = {
+  cMapUrl: new URL('./cmaps/', import.meta.url).href,
+  cMapPacked: true,
+  standardFontDataUrl: new URL('./standard_fonts/', import.meta.url).href,
+  wasmUrl: new URL('./wasm/', import.meta.url).href,
+  iccUrl: new URL('./iccs/', import.meta.url).href,
+};
 
 const BLANK_SIZES = {
   A4: [595, 842], A3: [842, 1191], B5: [516, 729],
@@ -194,7 +202,7 @@ async function loadSource(file) {
   let pdfjsDoc;
   try {
     // PDF.jsにはコピーを渡す（Worker転送で元バッファが切り離される場合があるため）
-    pdfjsDoc = await pdfjsLib.getDocument({ data: buf.slice(), isEvalSupported: false }).promise;
+    pdfjsDoc = await pdfjsLib.getDocument({ data: buf.slice(), isEvalSupported: false, ...ASSET_PARAMS }).promise;
   } catch (e) {
     if (e && (e.name === 'PasswordException' || /password/i.test(String(e.message)))) {
       throw new Error('PASSWORD');
