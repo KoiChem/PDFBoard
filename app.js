@@ -349,16 +349,9 @@ els.insertInput.addEventListener('cancel', () => {
   pendingInsertIndex = null;
   insertPickerPending = false;
 });
-/* cancelイベントが発火しない環境向けの保険: フォーカス復帰後、未選択のままならロックを解除する */
-window.addEventListener('focus', () => {
-  if (!insertPickerPending) return;
-  setTimeout(() => {
-    if (insertPickerPending && !els.insertInput.files.length) {
-      insertPickerPending = false;
-      pendingInsertIndex = null;
-    }
-  }, 600);
-});
+/* 注意: focus復帰を契機にしたタイマー解除は置かない。前回のpickerのタイマーが
+   次回pickerのpendingを誤って解除し、選択ファイルが無言で無視される競合になるため、
+   解除は change / cancel イベントのみで行う（チャップ v1.2レビュー R01） */
 
 /* ファイル入力・ドロップ共通の入口 */
 async function handleIncomingFiles(fileList) {
