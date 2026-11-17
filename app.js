@@ -416,28 +416,18 @@ function applySelectionDom() {
   });
   updateStatus();
 }
-/* 直近のポインター種別（タッチ判定用） */
-let lastPointerType = 'mouse';
-window.addEventListener('pointerdown', (e) => { lastPointerType = e.pointerType || 'mouse'; }, true);
-
 function onThumbClick(e, id) {
   focusId = id;
   const idx = pages.findIndex((p) => p.id === id);
-  if (lastPointerType === 'touch' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-    // スマホ/タブレット: 修飾キーが無いので、タップは複数選択のトグルにする
-    if (selected.has(id)) selected.delete(id); else selected.add(id);
-    anchorId = id;
-  } else if (e.shiftKey && anchorId !== null) {
+  if (e.shiftKey && anchorId !== null) {
     const a = pages.findIndex((p) => p.id === anchorId);
     if (a >= 0) {
       const [s, t] = a < idx ? [a, idx] : [idx, a];
       selected = new Set(pages.slice(s, t + 1).map((p) => p.id));
     }
-  } else if (e.ctrlKey || e.metaKey) {
-    if (selected.has(id)) selected.delete(id); else selected.add(id);
-    anchorId = id;
   } else {
-    selectOnly(id);
+    // 通常クリック／タップは複数選択のトグル（マウス・タッチ共通のオーナー指定）
+    if (selected.has(id)) selected.delete(id); else selected.add(id);
     anchorId = id;
   }
   applySelectionDom();
@@ -734,12 +724,8 @@ els.board.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   const id = Number(t.dataset.id);
   const idx = pages.findIndex((p) => p.id === id);
-  // 選択内なら選択を維持、選択外ならそのページだけを選択（チャップ合意）
-  // ただしタッチでは複数選択を維持するため、未選択ページは選択に追加する
-  if (!selected.has(id)) {
-    if (lastPointerType === 'touch') { selected.add(id); anchorId = id; applySelectionDom(); }
-    else { selectOnly(id); anchorId = id; applySelectionDom(); }
-  }
+  // 選択内なら選択を維持、選択外なら選択に追加する（複数選択トグル方式に統一）
+  if (!selected.has(id)) { selected.add(id); anchorId = id; applySelectionDom(); }
   focusId = id;
   showMenu(e.clientX, e.clientY, idx);
 });
@@ -759,7 +745,7 @@ els.board.addEventListener('dragstart', (e) => {
   const t = e.target.closest('.thumb');
   if (!t) return;
   const id = Number(t.dataset.id);
-  if (!selected.has(id)) { selectOnly(id); anchorId = id; applySelectionDom(); }
+  if (!selected.has(id)) { selected.add(id); anchorId = id; applySelectionDom(); }
   dragIds = selectedPagesInOrder().map((p) => p.id);
   t.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move';
