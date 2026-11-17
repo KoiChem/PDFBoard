@@ -12,6 +12,7 @@
   <div class="tb-group">
     <span class="logo">PDFBoard</span>
     <button id="btn-open" type="button">ファイルを開く</button>
+    <button id="btn-insert" type="button" disabled title="末尾にPDFを挿入">PDFを追加</button>
     <button id="btn-save" type="button" disabled>保存</button>
     <button id="btn-extract" type="button" disabled>選択ページを抽出…</button>
     <button id="btn-individual" type="button" disabled>選択ページを個別保存</button>
@@ -39,6 +40,7 @@
     <span id="zoom-val">中</span>
   </div>
   <input id="file-input" type="file" accept=".pdf,application/pdf" hidden>
+  <input id="insert-input" type="file" accept=".pdf,application/pdf" multiple hidden>
   <input id="csv-input" type="file" accept=".csv,text/csv,text/plain" hidden>
 </header>
 

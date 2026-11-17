@@ -24,8 +24,9 @@ const LS_KEYS = { zoom: 'pdfboard.zoom', blank: 'pdfboard.blankSize', csv: 'pdfb
 const $ = (id) => document.getElementById(id);
 const els = {
   board: $('board'), empty: $('empty-state'), boardWrap: $('board-wrap'),
-  fileInput: $('file-input'), csvInput: $('csv-input'),
+  fileInput: $('file-input'), csvInput: $('csv-input'), insertInput: $('insert-input'),
   btnOpen: $('btn-open'), btnOpenEmpty: $('btn-open-empty'), btnSave: $('btn-save'),
+  btnInsert: $('btn-insert'),
   btnExtract: $('btn-extract'), btnIndividual: $('btn-individual'), btnCsv: $('btn-csv'),
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'), btnBlank: $('btn-blank'),
   blankSize: $('blank-size'), zoom: $('zoom'), zoomVal: $('zoom-val'),
@@ -90,8 +91,11 @@ function toast(msg, type = 'info', long = false) {
 /* 確認ダイアログ（仕様19: 既定フォーカスはキャンセル） */
 let modalResolve = null;
 let modalPromise = null;
-/* UIロック中か（処理中 or 確認ダイアログ表示中は新規操作を受け付けない） */
-const uiLocked = () => busy || modalPromise !== null;
+/* PDF挿入のファイル選択ダイアログ待機状態（開いている間は挿入位置がずれないようUIをロックする） */
+let insertPickerPending = false;
+let pendingInsertIndex = null;
+/* UIロック中か（処理中 or 確認ダイアログ表示中 or 挿入ファイル選択中は新規操作を受け付けない） */
+const uiLocked = () => busy || modalPromise !== null || insertPickerPending;
 
 function confirmDialog(message) {
   if (modalPromise) return Promise.resolve(false); // 再入は拒否（共有すると1回の承認で複数操作が進む）
@@ -149,6 +153,7 @@ function updateStatus() {
   els.empty.hidden = has;
   els.board.hidden = !has;
   els.btnSave.disabled = !has;
+  els.btnInsert.disabled = !has;
   els.btnExtract.disabled = selected.size === 0;
   els.btnIndividual.disabled = selected.size === 0;
   els.btnCsv.disabled = !has;
@@ -188,8 +193,8 @@ function restoreHistory() {
   renderBoard();
   updateStatus();
 }
-function undo() { if (busy) return; if (historyIndex > 0) { historyIndex--; restoreHistory(); } }
-function redo() { if (busy) return; if (historyIndex < history.length - 1) { historyIndex++; restoreHistory(); } }
+function undo() { if (uiLocked()) return; if (historyIndex > 0) { historyIndex--; restoreHistory(); } }
+function redo() { if (uiLocked()) return; if (historyIndex < history.length - 1) { historyIndex++; restoreHistory(); } }
 els.btnUndo.addEventListener('click', undo);
 els.btnRedo.addEventListener('click', redo);
 
@@ -218,14 +223,17 @@ async function loadSource(file) {
     throw new Error('EDIT_UNSUPPORTED');
   }
   const baseRots = [];
+  const pageDims = [];
   for (let i = 1; i <= pdfjsDoc.numPages; i++) {
     const pg = await pdfjsDoc.getPage(i);
     baseRots.push(((pg.rotate % 360) + 360) % 360);
+    const vp0 = pg.getViewport({ scale: 1, rotation: 0 });
+    pageDims.push({ w: vp0.width, h: vp0.height });
     pg.cleanup();
   }
   const src = {
     id: nextSourceId++, name: file.name, bytes: buf,
-    pdfjsDoc, pdfLibDoc, pageCount: pdfjsDoc.numPages, baseRots,
+    pdfjsDoc, pdfLibDoc, pageCount: pdfjsDoc.numPages, baseRots, pageDims,
   };
   return src;
 }
@@ -273,8 +281,10 @@ async function openNewPdf(file) {
   }
 }
 
-/* 末尾に追加（一括検証し、1件でも失敗したら何も追加しない／Undoは1回分） */
-async function appendPdfs(files) {
+/* 指定位置にPDF群を挿入（一括検証し、1件でも失敗したら何も追加しない／Undoは1回分／選択・基準ファイルは不変） */
+async function insertPdfs(files, atIndex) {
+  const at = Math.max(0, Math.min(atIndex, pages.length));
+  const beforeCount = pages.length;
   setBusy(true, '追加するPDFを確認中…');
   const loaded = [];
   try {
@@ -286,15 +296,69 @@ async function appendPdfs(files) {
     setBusy(false);
     return;
   }
+  const newPages = [];
   for (const s of loaded) {
     sources.set(s.id, s);
-    pages = pages.concat(makeSrcPages(s));
+    newPages.push(...makeSrcPages(s));
   }
+  pages = [...pages.slice(0, at), ...newPages, ...pages.slice(at)];
   pushHistory();
   renderBoard();
   setBusy(false);
-  toast('ページを追加しました', 'success');
+  toast(`${loaded.length}ファイル・${newPages.length}ページを挿入しました`, 'success');
+  if (beforeCount <= 100 && pages.length > 100) {
+    toast('100ページを超えるPDFです。動作が重くなる場合があります', 'warn', true);
+  }
 }
+
+/* 末尾に追加（D&D・従来経路） */
+async function appendPdfs(files) {
+  return insertPdfs(files, pages.length);
+}
+
+/* 挿入用ファイル選択を開く（選択中は insertPickerPending でUIをロックし、挿入位置を固定する） */
+function requestInsert(atIndex) {
+  if (uiLocked() || !pages.length) return;
+  pendingInsertIndex = Math.max(0, Math.min(atIndex, pages.length));
+  insertPickerPending = true;
+  els.insertInput.value = '';
+  try {
+    els.insertInput.click();
+  } catch (e) {
+    insertPickerPending = false;
+    pendingInsertIndex = null;
+    throw e;
+  }
+}
+els.btnInsert.addEventListener('click', () => requestInsert(pages.length));
+els.insertInput.addEventListener('change', async () => {
+  const files = [...els.insertInput.files];
+  const at = pendingInsertIndex;
+  els.insertInput.value = '';
+  pendingInsertIndex = null;
+  insertPickerPending = false;
+  if (!files.length || at === null) return;
+  /* accept属性に依存せず検証する: 非PDFが1件でもあれば全件拒否 */
+  if (files.some((f) => !isPdfFile(f))) {
+    toast('PDF以外のファイルが含まれているため挿入できませんでした', 'error');
+    return;
+  }
+  await insertPdfs(files, at);
+});
+els.insertInput.addEventListener('cancel', () => {
+  pendingInsertIndex = null;
+  insertPickerPending = false;
+});
+/* cancelイベントが発火しない環境向けの保険: フォーカス復帰後、未選択のままならロックを解除する */
+window.addEventListener('focus', () => {
+  if (!insertPickerPending) return;
+  setTimeout(() => {
+    if (insertPickerPending && !els.insertInput.files.length) {
+      insertPickerPending = false;
+      pendingInsertIndex = null;
+    }
+  }, 600);
+});
 
 /* ファイル入力・ドロップ共通の入口 */
 async function handleIncomingFiles(fileList) {
@@ -372,6 +436,21 @@ async function fillThumbs(token) {
 }
 
 /* ---------- ボード描画 ---------- */
+/* ページの表示比率（w / h）。実効回転が90/270なら縦横を入れ替える */
+function pageAspect(p) {
+  let w, h, rot;
+  if (p.kind === 'blank') {
+    [w, h] = BLANK_SIZES[p.blankSize];
+    rot = p.rotDelta;
+  } else {
+    const src = sources.get(p.sourceId);
+    const d = src && src.pageDims ? src.pageDims[p.srcIndex] : null;
+    w = d ? d.w : 595; h = d ? d.h : 842;
+    rot = src ? src.baseRots[p.srcIndex] + p.rotDelta : p.rotDelta;
+  }
+  const r = ((rot % 360) + 360) % 360;
+  return (r === 90 || r === 270) ? `${h} / ${w}` : `${w} / ${h}`;
+}
 function renderBoard() {
   renderToken++;
   const token = renderToken;
@@ -384,6 +463,7 @@ function renderBoard() {
     d.dataset.id = String(p.id);
     const wrap = document.createElement('div');
     wrap.className = 'img-wrap';
+    wrap.style.aspectRatio = pageAspect(p);
     const cached = thumbCache.get(cacheKeyOf(p));
     if (cached) {
       const img = document.createElement('img'); img.src = cached; img.alt = '';
@@ -393,26 +473,35 @@ function renderBoard() {
       const ph = document.createElement('span'); ph.className = 'ph'; ph.textContent = '生成中…';
       wrap.appendChild(img); wrap.appendChild(ph);
     }
-    const meta = document.createElement('div');
-    meta.className = 'meta';
+    /* ページ番号はサムネイルの中（左下・白背景）に表示する */
     const num = document.createElement('span');
     num.className = 'pnum'; num.textContent = String(idx + 1);
-    meta.appendChild(num);
+    wrap.appendChild(num);
+    d.appendChild(wrap);
+    /* バッジがある場合のみ下段（.meta）を出す */
+    const badges = [];
     if (p.kind === 'blank') {
-      const b = document.createElement('span');
-      b.className = 'badge'; b.textContent = `空白 ${p.blankSize}`;
-      meta.appendChild(b);
-    } else if (p.sourceId !== primarySourceId) {
-      const b = document.createElement('span');
-      b.className = 'badge src'; b.textContent = '追加分';
-      b.title = sources.get(p.sourceId) ? sources.get(p.sourceId).name : '';
-      meta.appendChild(b);
-    } else if (p.rotDelta) {
-      const b = document.createElement('span');
-      b.className = 'badge'; b.textContent = `${p.rotDelta}°`;
-      meta.appendChild(b);
+      badges.push({ cls: 'badge', text: `空白 ${p.blankSize}` });
+    } else {
+      if (p.sourceId !== primarySourceId) {
+        badges.push({
+          cls: 'badge src', text: '追加分',
+          title: sources.get(p.sourceId) ? sources.get(p.sourceId).name : '',
+        });
+      }
+      if (p.rotDelta) badges.push({ cls: 'badge', text: `${p.rotDelta}°` });
     }
-    d.appendChild(wrap); d.appendChild(meta);
+    if (badges.length) {
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      for (const b of badges) {
+        const s = document.createElement('span');
+        s.className = b.cls; s.textContent = b.text;
+        if (b.title) s.title = b.title;
+        meta.appendChild(s);
+      }
+      d.appendChild(meta);
+    }
     els.board.appendChild(d);
   });
   updateStatus();
@@ -444,10 +533,12 @@ function onThumbClick(e, id) {
   applySelectionDom();
 }
 els.board.addEventListener('click', (e) => {
+  if (uiLocked()) return;
   const t = e.target.closest('.thumb');
   if (t) onThumbClick(e, Number(t.dataset.id));
 });
 els.boardWrap.addEventListener('click', (e) => {
+  if (uiLocked()) return;
   if (e.target === els.board || e.target === els.boardWrap) {
     selectOnly(null); anchorId = null; applySelectionDom();
   }
@@ -458,7 +549,7 @@ function selectedPagesInOrder() {
   return pages.filter((p) => selected.has(p.id));
 }
 function rotateSelected(delta) {
-  if (busy || !selected.size) return;
+  if (uiLocked() || !selected.size) return;
   for (const p of pages) {
     if (selected.has(p.id)) p.rotDelta = ((p.rotDelta + delta) % 360 + 360) % 360;
   }
@@ -466,7 +557,7 @@ function rotateSelected(delta) {
   renderBoard();
 }
 function duplicateSelected() {
-  if (busy || !selected.size) return;
+  if (uiLocked() || !selected.size) return;
   const copies = new Map();
   const out = [];
   for (const p of pages) {
@@ -485,7 +576,7 @@ function duplicateSelected() {
   toast('ページを複製しました', 'success');
 }
 function insertBlank(afterIndex) {
-  if (busy) return;
+  if (uiLocked()) return;
   const size = els.blankSize.value;
   const bp = { id: nextPageId++, kind: 'blank', rotDelta: 0, blankSize: size };
   const at = Math.max(0, Math.min(afterIndex + 1, pages.length));
@@ -708,6 +799,10 @@ function showMenu(x, y, idx) {
     { label: 'ページを複製', act: () => duplicateSelected() },
     { label: '空白ページを後に追加', act: () => insertBlank(menuTargetIndex) },
     'sep',
+    { label: 'この直後にPDFを挿入…', act: () => requestInsert(menuTargetIndex + 1) },
+    { label: '先頭にPDFを挿入…', act: () => requestInsert(0) },
+    { label: '末尾にPDFを挿入…', act: () => requestInsert(pages.length) },
+    'sep',
     { label: '選択ページを抽出…', act: () => extractSelected() },
     { label: csvRules.length ? '選択ページを個別保存（CSV分割）' : '選択ページを個別保存', act: () => individualSave() },
     'sep',
@@ -731,6 +826,7 @@ function showMenu(x, y, idx) {
   els.menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px';
 }
 els.board.addEventListener('contextmenu', (e) => {
+  if (uiLocked()) return;
   const t = e.target.closest('.thumb');
   if (!t) return;
   e.preventDefault();
@@ -754,6 +850,7 @@ function clearDropMarks() {
     .forEach((el) => el.classList.remove('drop-before', 'drop-after'));
 }
 els.board.addEventListener('dragstart', (e) => {
+  if (uiLocked()) { e.preventDefault(); return; }
   const t = e.target.closest('.thumb');
   if (!t) return;
   const id = Number(t.dataset.id);
@@ -788,7 +885,7 @@ els.board.addEventListener('dragover', (e) => {
   }
 });
 els.board.addEventListener('drop', (e) => {
-  if (!dragIds.length || busy) return;
+  if (!dragIds.length || uiLocked()) return;
   e.preventDefault();
   const target = dropIndexFromEvent(e);
   const moving = pages.filter((p) => dragIds.includes(p.id));

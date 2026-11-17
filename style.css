@@ -103,17 +103,30 @@ body.busy #toolbar button, body.busy #toolbar select, body.busy #toolbar input {
 .thumb.drop-before { box-shadow: -4px 0 0 0 var(--accent); }
 .thumb.drop-after { box-shadow: 4px 0 0 0 var(--accent); }
 .thumb .img-wrap {
-  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  width: 100%;
   background: #fafaf9; border-radius: 6px; overflow: hidden;
-  min-height: 60px;
 }
-.thumb img { max-width: 100%; height: auto; display: block; pointer-events: none; }
-.thumb .ph { color: var(--muted); font-size: 12px; padding: 26px 0; }
+.thumb .img-wrap img {
+  display: block; width: 100%; height: 100%;
+  object-fit: contain; pointer-events: none;
+}
+.thumb .ph {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px;
+}
+.thumb .pnum {
+  position: absolute; left: 3px; bottom: 3px; z-index: 1;
+  padding: 0 4px; border-radius: 4px;
+  background: rgba(255, 255, 255, .92);
+  color: var(--ink); font-size: 11px; font-weight: 600; line-height: 1.5;
+  pointer-events: none;
+}
 .thumb .meta {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; justify-content: flex-end; align-items: center; gap: 4px;
   margin-top: 5px; font-size: 12px;
 }
-.thumb .pnum { font-weight: 600; }
 .thumb .badge {
   font-size: 10px; color: #92400e; background: #fef3c7;
   border-radius: 6px; padding: 1px 5px;
