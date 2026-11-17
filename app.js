@@ -336,7 +336,7 @@ async function renderThumbData(p) {
 async function fillThumbs(token) {
   const targets = pages.filter((p) => !thumbCache.has(cacheKeyOf(p)));
   let done = pages.length - targets.length;
-  if (targets.length) showProgress('サムネイル生成中', done, pages.length);
+  if (targets.length && token === renderToken) showProgress('サムネイル生成中', done, pages.length);
   for (const p of targets) {
     if (token !== renderToken) return;
     try {
@@ -348,6 +348,8 @@ async function fillThumbs(token) {
         if (ph) ph.remove();
       }
     } catch (e) { console.error('thumbnail failed', e); }
+    // await の間に別の描画が始まっていたら、古いループは進捗UIに触らない
+    if (token !== renderToken) return;
     done++;
     showProgress('サムネイル生成中', done, pages.length);
   }
