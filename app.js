@@ -491,7 +491,7 @@ function cacheKeyOf(p) {
     ? `${w}|blank|${p.blankSize}|${p.rotDelta}`
     : `${w}|src|${p.sourceId}|${p.srcIndex}|${p.rotDelta}`;
 }
-async function renderThumbData(p) {
+async function renderThumbData(p, token) {
   const key = cacheKeyOf(p);
   if (thumbCache.has(key)) return thumbCache.get(key);
   const W = renderWidth();
@@ -519,7 +519,8 @@ async function renderThumbData(p) {
     page.cleanup();
     url = c.toDataURL('image/jpeg', 0.82);
   }
-  thumbCache.set(key, url);
+  /* 世代が変わっていたら（クリア・開き直し等）キャッシュへは書き戻さない */
+  if (token === renderToken) thumbCache.set(key, url);
   return url;
 }
 async function fillThumbs(token) {
@@ -529,7 +530,7 @@ async function fillThumbs(token) {
   for (const p of targets) {
     if (token !== renderToken) return;
     try {
-      const url = await renderThumbData(p);
+      const url = await renderThumbData(p, token);
       const img = els.board.querySelector(`.thumb[data-id="${p.id}"] img`);
       if (img && token === renderToken) {
         img.src = url;
@@ -1071,6 +1072,8 @@ function moveFocus(delta) {
   if (el) { el.focus(); el.scrollIntoView({ block: 'nearest' }); }
 }
 document.addEventListener('keydown', (e) => {
+  /* モーダル表示中は、入力欄にフォーカスがあっても保存ショートカットだけはブラウザ既定動作（ページ保存）を抑止する */
+  if (modalPromise && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); return; }
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
   if (uiLocked()) return; // 処理中・ダイアログ表示中は編集系ショートカットを受け付けない
