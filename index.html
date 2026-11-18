@@ -13,7 +13,7 @@
     <span class="logo">PDFBoard</span>
     <button id="btn-open" type="button">ファイルを開く</button>
     <button id="btn-insert" type="button" disabled title="末尾にPDFを挿入">PDFを追加</button>
-    <button id="btn-save" type="button" disabled>保存</button>
+    <button id="btn-save" type="button" disabled>別名保存</button>
     <button id="btn-extract" type="button" disabled>選択ページを抽出…</button>
     <button id="btn-individual" type="button" disabled>選択ページを個別保存</button>
     <button id="btn-csv" type="button" disabled>CSV読込</button>
@@ -21,6 +21,8 @@
   <div class="tb-group">
     <button id="btn-undo" type="button" disabled>元に戻す</button>
     <button id="btn-redo" type="button" disabled>やり直し</button>
+    <button id="btn-deselect" type="button" disabled>全選択解除</button>
+    <button id="btn-clear" type="button" disabled>クリア</button>
   </div>
   <div class="tb-group">
     <label class="tb-label" for="blank-size">空白ページ</label>
@@ -74,6 +76,7 @@
 <div id="modal-overlay" hidden>
   <div id="modal-box" role="dialog" aria-modal="true">
     <p id="modal-message"></p>
+    <input id="modal-input" type="text" hidden autocomplete="off" spellcheck="false">
     <div id="modal-buttons">
       <button id="modal-ok" type="button">OK</button>
       <button id="modal-cancel" type="button">キャンセル</button>

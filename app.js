@@ -18,6 +18,19 @@ const BLANK_SIZES = {
   A4: [595, 842], A3: [842, 1191], B5: [516, 729],
   B4: [729, 1032], A5: [420, 595], LETTER: [612, 792],
 };
+/* 追加ソースのバッジ色（背景/文字）。追加順に割り当て、10色を超えたら循環する */
+const SOURCE_PALETTE = [
+  { bg: '#dbeafe', fg: '#1e40af' }, // 青
+  { bg: '#dcfce7', fg: '#166534' }, // 緑
+  { bg: '#fef3c7', fg: '#92400e' }, // 黄土
+  { bg: '#fce7f3', fg: '#9d174d' }, // ピンク
+  { bg: '#ede9fe', fg: '#5b21b6' }, // 紫
+  { bg: '#e0f2fe', fg: '#075985' }, // 水色
+  { bg: '#ecfccb', fg: '#3f6212' }, // 黄緑
+  { bg: '#ffedd5', fg: '#9a3412' }, // 橙
+  { bg: '#ffe4e6', fg: '#9f1239' }, // 薔薇
+  { bg: '#ccfbf1', fg: '#115e59' }, // 青緑
+];
 const FORBIDDEN = /[\/\\:*?"<>|]/g;
 const LS_KEYS = { zoom: 'pdfboard.zoom', blank: 'pdfboard.blankSize', csv: 'pdfboard.lastCsvName' };
 
@@ -27,6 +40,7 @@ const els = {
   fileInput: $('file-input'), csvInput: $('csv-input'), insertInput: $('insert-input'),
   btnOpen: $('btn-open'), btnOpenEmpty: $('btn-open-empty'), btnSave: $('btn-save'),
   btnInsert: $('btn-insert'),
+  btnDeselect: $('btn-deselect'), btnClear: $('btn-clear'),
   btnExtract: $('btn-extract'), btnIndividual: $('btn-individual'), btnCsv: $('btn-csv'),
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'), btnBlank: $('btn-blank'),
   blankSize: $('blank-size'), zoom: $('zoom'), zoomVal: $('zoom-val'),
@@ -35,6 +49,7 @@ const els = {
   stCsv: $('st-csv'), stDirty: $('st-dirty'),
   menu: $('context-menu'), overlay: $('drop-overlay'),
   modalOverlay: $('modal-overlay'), modalMsg: $('modal-message'),
+  modalInput: $('modal-input'),
   modalOk: $('modal-ok'), modalCancel: $('modal-cancel'),
   toasts: $('toasts'),
 };
@@ -49,6 +64,8 @@ let primarySourceId = null;    // 最初に開いたPDF（ファイル名の基�
 let baseName = 'document';
 let csvRules = [];             // {pages:[表示番号...], name, line}
 let csvFileName = '';
+let lastSaveName = null;       // 別名保存で最後に使った名前（拡張子なし）。開き直し・クリアでリセット
+let addedSourceCounter = 0;    // 追加ソースの通し番号（色・ラベル用）。開き直し・クリアでリセット
 let history = [];              // 記述子配列のJSONスナップショット
 let historyIndex = -1;
 let savedKey = null;           // 最後に全体保存した時点のスナップショット
@@ -57,6 +74,7 @@ let renderToken = 0;
 let nextSourceId = 1;
 let nextPageId = 1;
 const thumbCache = new Map();  // cacheKey -> dataURL
+let lastRenderWidth = 360;     // 直近のサムネイル解像度バンド（変わったらキャッシュを破棄）
 
 const snapshotPages = () => JSON.stringify(pages);
 const isDirty = () => pages.length > 0 && savedKey !== null && snapshotPages() !== savedKey;
@@ -91,28 +109,68 @@ function toast(msg, type = 'info', long = false) {
 /* 確認ダイアログ（仕様19: 既定フォーカスはキャンセル） */
 let modalResolve = null;
 let modalPromise = null;
+let modalIsPrompt = false;
 /* PDF挿入のファイル選択ダイアログ待機状態（開いている間は挿入位置がずれないようUIをロックする） */
 let insertPickerPending = false;
 let pendingInsertIndex = null;
 /* UIロック中か（処理中 or 確認ダイアログ表示中 or 挿入ファイル選択中は新規操作を受け付けない） */
 const uiLocked = () => busy || modalPromise !== null || insertPickerPending;
-
+/* 保存名の正規化: 前後空白除去→末尾の .pdf を1個だけ除去→禁止文字を置換。空なら ''（保存不可） */
+function normalizeSaveStem(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  s = s.replace(/\.pdf$/i, '');
+  return sanitizeName(s, '');
+}
+function updateModalOkState() {
+  if (modalIsPrompt) els.modalOk.disabled = !normalizeSaveStem(els.modalInput.value);
+}
 function confirmDialog(message) {
   if (modalPromise) return Promise.resolve(false); // 再入は拒否（共有すると1回の承認で複数操作が進む）
+  modalIsPrompt = false;
   modalPromise = new Promise((resolve) => {
     modalResolve = resolve;
     els.modalMsg.textContent = message;
+    els.modalInput.hidden = true;
+    els.modalOk.disabled = false;
     els.modalOverlay.hidden = false;
     els.modalCancel.focus();
   });
   return modalPromise;
 }
+/* ファイル名入力ダイアログ（確認ダイアログと同じモーダル管理を共有）。OKで入力文字列、キャンセルで null */
+function promptDialog(message, initialValue) {
+  if (modalPromise) return Promise.resolve(null); // 再入は拒否
+  modalIsPrompt = true;
+  modalPromise = new Promise((resolve) => {
+    modalResolve = resolve;
+    els.modalMsg.textContent = message;
+    els.modalInput.hidden = false;
+    els.modalInput.value = initialValue;
+    els.modalOverlay.hidden = false;
+    updateModalOkState();
+    els.modalInput.focus();
+    els.modalInput.select();
+  });
+  return modalPromise;
+}
 function closeModal(result) {
   els.modalOverlay.hidden = true;
-  if (modalResolve) { modalResolve(result); modalResolve = null; modalPromise = null; }
+  if (modalResolve) {
+    /* 入力ダイアログは OK で文字列、キャンセルで null。確認ダイアログは真偽値を返す */
+    const value = modalIsPrompt ? (result ? els.modalInput.value : null) : result;
+    modalResolve(value);
+    modalResolve = null; modalPromise = null; modalIsPrompt = false;
+  }
 }
 els.modalOk.addEventListener('click', () => closeModal(true));
 els.modalCancel.addEventListener('click', () => closeModal(false));
+els.modalInput.addEventListener('input', updateModalOkState);
+els.modalInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !els.modalOk.disabled) { e.preventDefault(); closeModal(true); }
+});
+els.modalOverlay.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); closeModal(false); }
+});
 
 function setBusy(on, label) {
   busy = on;
@@ -160,6 +218,8 @@ function updateStatus() {
   els.btnBlank.disabled = !has;
   els.btnUndo.disabled = historyIndex <= 0;
   els.btnRedo.disabled = historyIndex >= history.length - 1;
+  els.btnDeselect.disabled = selected.size === 0;
+  els.btnClear.disabled = !has;
   els.btnIndividual.textContent = csvRules.length
     ? '選択ページを個別保存（CSV分割）' : '選択ページを個別保存';
   if (!has) {
@@ -198,6 +258,43 @@ function redo() { if (uiLocked()) return; if (historyIndex < history.length - 1)
 els.btnUndo.addEventListener('click', undo);
 els.btnRedo.addEventListener('click', redo);
 
+/* 全選択解除（選択は履歴の対象外。フォーカスは維持する） */
+els.btnDeselect.addEventListener('click', () => {
+  if (uiLocked()) return;
+  selected.clear();
+  anchorId = null;
+  applySelectionDom();
+});
+
+/* クリア: 開いているPDF・編集内容・履歴をすべて破棄して初期状態に戻す（常時確認、Undo不可） */
+async function clearWorkspace() {
+  if (uiLocked() || !pages.length) return;
+  const msg = isDirty()
+    ? '未保存の変更があります。\n開いているPDFと編集内容・履歴をすべてクリアします。\n続けますか？'
+    : '開いているPDFと編集内容・履歴をすべてクリアします。\n続けますか？';
+  const ok = await confirmDialog(msg);
+  if (!ok || busy) return;
+  setBusy(true, 'クリア中…');
+  renderToken++; // 進行中のサムネイル描画を無効化
+  const docs = [...sources.values()];
+  /* UI状態を先に初期化してから、PDF.jsドキュメントを解放する */
+  sources = new Map();
+  pages = []; selected = new Set(); anchorId = null; focusId = null;
+  primarySourceId = null; baseName = 'document';
+  lastSaveName = null; addedSourceCounter = 0;
+  csvRules = []; csvFileName = '';
+  history = []; historyIndex = -1; savedKey = null;
+  thumbCache.clear();
+  renderBoard();
+  try {
+    for (const s of docs) { try { await s.pdfjsDoc.destroy(); } catch (e) { /* 解放失敗でもクリアは続行 */ } }
+  } finally {
+    setBusy(false);
+  }
+  toast('クリアしました', 'success');
+}
+els.btnClear.addEventListener('click', clearWorkspace);
+
 /* ---------- PDF読み込み ---------- */
 function isPdfFile(f) {
   return /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
@@ -224,12 +321,24 @@ async function loadSource(file) {
   }
   const baseRots = [];
   const pageDims = [];
-  for (let i = 1; i <= pdfjsDoc.numPages; i++) {
-    const pg = await pdfjsDoc.getPage(i);
-    baseRots.push(((pg.rotate % 360) + 360) % 360);
-    const vp0 = pg.getViewport({ scale: 1, rotation: 0 });
-    pageDims.push({ w: vp0.width, h: vp0.height });
-    pg.cleanup();
+  try {
+    for (let i = 1; i <= pdfjsDoc.numPages; i++) {
+      const pg = await pdfjsDoc.getPage(i);
+      try {
+        const vp0 = pg.getViewport({ scale: 1, rotation: 0 });
+        if (!(vp0.width > 0 && vp0.height > 0 &&
+              Number.isFinite(vp0.width) && Number.isFinite(vp0.height))) {
+          throw new Error('INVALID_PAGE_DIMS');
+        }
+        baseRots.push(((pg.rotate % 360) + 360) % 360);
+        pageDims.push({ w: vp0.width, h: vp0.height });
+      } finally {
+        pg.cleanup();
+      }
+    }
+  } catch (e) {
+    try { await pdfjsDoc.destroy(); } catch (err) {}
+    throw e;
   }
   const src = {
     id: nextSourceId++, name: file.name, bytes: buf,
@@ -268,6 +377,7 @@ async function openNewPdf(file) {
     selected = new Set(); anchorId = null;
     focusId = pages.length ? pages[0].id : null;
     csvRules = []; csvFileName = '';
+    lastSaveName = null; addedSourceCounter = 0; thumbCache.clear();
     history = []; historyIndex = -1; savedKey = snapshotPages();
     pushHistory();
     renderBoard();
@@ -298,6 +408,9 @@ async function insertPdfs(files, atIndex) {
   }
   const newPages = [];
   for (const s of loaded) {
+    /* 追加ソースの通し番号と色は、検証成功後の登録時にだけ割り当てる（失敗で番号を消費しない） */
+    s.colorOrdinal = ++addedSourceCounter;
+    s.colorIdx = (s.colorOrdinal - 1) % SOURCE_PALETTE.length;
     sources.set(s.id, s);
     newPages.push(...makeSrcPages(s));
   }
@@ -353,26 +466,30 @@ els.insertInput.addEventListener('cancel', () => {
    次回pickerのpendingを誤って解除し、選択ファイルが無言で無視される競合になるため、
    解除は change / cancel イベントのみで行う（チャップ v1.2レビュー R01） */
 
-/* ファイル入力・ドロップ共通の入口 */
+/* ファイル入力・ドロップ共通の入口（非PDFが1件でも混ざっていれば全件拒否＝挿入pickerと統一） */
 async function handleIncomingFiles(fileList) {
   if (uiLocked()) return;
   const files = [...fileList];
-  const pdfs = files.filter(isPdfFile);
-  if (files.length && !pdfs.length) { toast('PDF以外のファイルは開けません', 'error'); return; }
-  if (!pdfs.length) return;
+  if (!files.length) return;
+  if (files.some((f) => !isPdfFile(f))) {
+    toast('PDF以外のファイルが含まれているため追加できませんでした', 'error');
+    return;
+  }
   if (pages.length === 0) {
-    if (pdfs.length > 1) toast('複数のPDFがドロップされたため、最初の1ファイルのみ開きます', 'warn', true);
-    await openNewPdf(pdfs[0]);
+    if (files.length > 1) toast('複数のPDFがドロップされたため、最初の1ファイルのみ開きます', 'warn', true);
+    await openNewPdf(files[0]);
   } else {
-    await appendPdfs(pdfs);
+    await appendPdfs(files);
   }
 }
 
 /* ---------- サムネイル生成 ---------- */
 function cacheKeyOf(p) {
+  /* 解像度バンド（renderWidth）もキーに含め、200ページ閾値跨ぎで旧解像度を使い回さない */
+  const w = renderWidth();
   return p.kind === 'blank'
-    ? `blank|${p.blankSize}|${p.rotDelta}`
-    : `src|${p.sourceId}|${p.srcIndex}|${p.rotDelta}`;
+    ? `${w}|blank|${p.blankSize}|${p.rotDelta}`
+    : `${w}|src|${p.sourceId}|${p.srcIndex}|${p.rotDelta}`;
 }
 async function renderThumbData(p) {
   const key = cacheKeyOf(p);
@@ -447,6 +564,8 @@ function pageAspect(p) {
 function renderBoard() {
   renderToken++;
   const token = renderToken;
+  const band = renderWidth();
+  if (band !== lastRenderWidth) { thumbCache.clear(); lastRenderWidth = band; }
   els.board.innerHTML = '';
   pages.forEach((p, idx) => {
     const d = document.createElement('div');
@@ -470,31 +589,31 @@ function renderBoard() {
     const num = document.createElement('span');
     num.className = 'pnum'; num.textContent = String(idx + 1);
     wrap.appendChild(num);
-    d.appendChild(wrap);
-    /* バッジがある場合のみ下段（.meta）を出す */
+    /* バッジ類はサムネイルの中（右上・縦積み）に表示する。カードの高さは画像比率のみで決まる */
     const badges = [];
     if (p.kind === 'blank') {
-      badges.push({ cls: 'badge', text: `空白 ${p.blankSize}` });
+      badges.push({ text: `空白 ${p.blankSize}` });
     } else {
-      if (p.sourceId !== primarySourceId) {
-        badges.push({
-          cls: 'badge src', text: '追加分',
-          title: sources.get(p.sourceId) ? sources.get(p.sourceId).name : '',
-        });
+      const src = sources.get(p.sourceId);
+      if (p.sourceId !== primarySourceId && src && src.colorOrdinal) {
+        const pal = SOURCE_PALETTE[src.colorIdx];
+        badges.push({ text: `追加${src.colorOrdinal}`, bg: pal.bg, fg: pal.fg });
+        d.title = src.name; // バッジは pointer-events:none のため、ファイル名はサムネイル自体のツールチップで出す
       }
-      if (p.rotDelta) badges.push({ cls: 'badge', text: `${p.rotDelta}°` });
+      if (p.rotDelta) badges.push({ text: `${p.rotDelta}°` });
     }
     if (badges.length) {
-      const meta = document.createElement('div');
-      meta.className = 'meta';
+      const stack = document.createElement('div');
+      stack.className = 'badge-stack';
       for (const b of badges) {
         const s = document.createElement('span');
-        s.className = b.cls; s.textContent = b.text;
-        if (b.title) s.title = b.title;
-        meta.appendChild(s);
+        s.className = 'badge'; s.textContent = b.text;
+        if (b.bg) { s.style.background = b.bg; s.style.color = b.fg; }
+        stack.appendChild(s);
       }
-      d.appendChild(meta);
+      wrap.appendChild(stack);
     }
+    d.appendChild(wrap);
     els.board.appendChild(d);
   });
   updateStatus();
@@ -629,12 +748,19 @@ async function saveAll() {
   // 保存開始時点の状態で固定する（処理中の編集で保存内容と保存済み判定がずれないように）
   const savePages = JSON.parse(snapshotPages());
   const saveKey = JSON.stringify(savePages);
+  /* 別名保存: 名前を入力してもらう（初回は {基準名}_edited、以降は前回の名前） */
+  const initial = lastSaveName !== null ? lastSaveName : `${sanitizeName(baseName, 'document')}_edited`;
+  const raw = await promptDialog('保存するファイル名を入力してください（.pdf は自動で付きます）', initial);
+  if (typeof raw !== 'string' || busy) return; // キャンセル時は何もしない
+  const stem = normalizeSaveStem(raw);
+  if (!stem) return; // ダイアログ側で空名はOK不可にしている（保険）
   setBusy(true, '保存中…');
   try {
     const bytes = await buildPdfBytes(savePages);
     await verifyCount(bytes, savePages.length);
-    downloadBytes(bytes, `${sanitizeName(baseName, 'document')}_edited.pdf`);
+    downloadBytes(bytes, `${stem}.pdf`);
     savedKey = saveKey;
+    lastSaveName = stem;
     updateStatus();
     toast('保存しました', 'success');
   } catch (e) {
