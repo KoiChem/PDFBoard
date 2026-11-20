@@ -390,39 +390,39 @@ async function openPdfBatch(files) {
     setBusy(false);
     return;
   }
-  /* 全件の読み込み成功後に一括コミット（旧ソースの破棄もこの後） */
-  const oldSources = [...sources.values()];
-  sources = new Map();
-  addedSourceCounter = 0;
-  pages = [];
-  for (const s of loaded) {
-    if (s !== loaded[0]) {
-      s.colorOrdinal = ++addedSourceCounter;
-      s.colorIdx = (s.colorOrdinal - 1) % SOURCE_PALETTE.length;
+  /* 全件の読み込み成功後に一括コミット（旧ソースの破棄もこの後）。
+     コミット中の予期しない例外でも busy が残らないよう finally で解除を保証する */
+  try {
+    const oldSources = [...sources.values()];
+    sources = new Map();
+    addedSourceCounter = 0;
+    pages = [];
+    for (const s of loaded) {
+      if (s !== loaded[0]) {
+        s.colorOrdinal = ++addedSourceCounter;
+        s.colorIdx = (s.colorOrdinal - 1) % SOURCE_PALETTE.length;
+      }
+      sources.set(s.id, s);
+      pages.push(...makeSrcPages(s));
     }
-    sources.set(s.id, s);
-    pages.push(...makeSrcPages(s));
+    primarySourceId = loaded[0].id;
+    baseName = baseOf(loaded[0].name);
+    selected = new Set(); anchorId = null;
+    focusId = pages.length ? pages[0].id : null;
+    csvRules = []; csvFileName = '';
+    lastSaveName = null; thumbCache.clear();
+    history = []; historyIndex = -1; savedKey = snapshotPages();
+    pushHistory();
+    renderBoard();
+    for (const s of oldSources) { try { await s.pdfjsDoc.destroy(); } catch (e) {} }
+  } finally {
+    setBusy(false);
   }
-  primarySourceId = loaded[0].id;
-  baseName = baseOf(loaded[0].name);
-  selected = new Set(); anchorId = null;
-  focusId = pages.length ? pages[0].id : null;
-  csvRules = []; csvFileName = '';
-  lastSaveName = null; thumbCache.clear();
-  history = []; historyIndex = -1; savedKey = snapshotPages();
-  pushHistory();
-  renderBoard();
-  for (const s of oldSources) { try { await s.pdfjsDoc.destroy(); } catch (e) {} }
-  setBusy(false);
   if (sorted.length > 1) toast(`${sorted.length}ファイル・${pages.length}ページを開きました`, 'success');
   else toast('PDFを開きました', 'success');
   if (pages.length > 100) toast('100ページを超えるPDFです。動作が重くなる場合があります', 'warn', true);
 }
 
-/* 互換ラッパー（単一ファイルを開く） */
-async function openNewPdf(file) {
-  return openPdfBatch([file]);
-}
 
 /* 指定位置にPDF群を挿入（一括検証し、1件でも失敗したら何も追加しない／Undoは1回分／選択・基準ファイルは不変）。
    バッチ内はファイル名の自然順に並べてから挿入する（既存ページの順序は変えない） */
