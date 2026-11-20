@@ -359,40 +359,75 @@ function makeSrcPages(src) {
   return out;
 }
 
-/* 新規に開く（既存の編集は破棄。未保存なら確認） */
-async function openNewPdf(file) {
-  if (uiLocked()) return;
+/* ファイル名の自然順ソート（2.pdf < 10.pdf）。安定ソートで同名は元の相対順序を保持し、全件取り込む */
+const fileNameCollator = new Intl.Collator('ja', { numeric: true, sensitivity: 'variant' });
+function sortFilesByName(files) {
+  return [...files].sort((a, b) => fileNameCollator.compare(a.name, b.name));
+}
+
+/* 新規に開く（複数ファイル対応・全件原子的）。
+   ファイル名順に並べ、先頭を基準ファイル、残りを追加ソースとして一括で開く。
+   1件でも読み込みに失敗したら何も開かず、既存のワークスペースを保持する。未保存なら確認は1回。 */
+async function openPdfBatch(files) {
+  if (uiLocked() || !files.length) return;
+  if (files.some((f) => !isPdfFile(f))) {
+    toast('PDF以外のファイルが含まれているため開けませんでした', 'error');
+    return;
+  }
+  const sorted = sortFilesByName(files);
   if (isDirty()) {
     const ok = await confirmDialog('未保存の変更があります。保存せずに続けますか？');
     if (!ok || busy) return;
   }
   setBusy(true, '読み込み中…');
+  const loaded = [];
   try {
-    const src = await loadSource(file);
-    for (const s of sources.values()) { try { await s.pdfjsDoc.destroy(); } catch (e) {} }
-    sources = new Map([[src.id, src]]);
-    primarySourceId = src.id;
-    baseName = baseOf(src.name);
-    pages = makeSrcPages(src);
-    selected = new Set(); anchorId = null;
-    focusId = pages.length ? pages[0].id : null;
-    csvRules = []; csvFileName = '';
-    lastSaveName = null; addedSourceCounter = 0; thumbCache.clear();
-    history = []; historyIndex = -1; savedKey = snapshotPages();
-    pushHistory();
-    renderBoard();
-    toast('PDFを開きました', 'success');
-    if (src.pageCount > 100) toast('100ページを超えるPDFです。動作が重くなる場合があります', 'warn', true);
+    for (const f of sorted) loaded.push(await loadSource(f));
   } catch (e) {
+    for (const s of loaded) { try { await s.pdfjsDoc.destroy(); } catch (err) {} }
     errorToastFor(e.message);
     console.error(e);
-  } finally {
     setBusy(false);
+    return;
   }
+  /* 全件の読み込み成功後に一括コミット（旧ソースの破棄もこの後） */
+  const oldSources = [...sources.values()];
+  sources = new Map();
+  addedSourceCounter = 0;
+  pages = [];
+  for (const s of loaded) {
+    if (s !== loaded[0]) {
+      s.colorOrdinal = ++addedSourceCounter;
+      s.colorIdx = (s.colorOrdinal - 1) % SOURCE_PALETTE.length;
+    }
+    sources.set(s.id, s);
+    pages.push(...makeSrcPages(s));
+  }
+  primarySourceId = loaded[0].id;
+  baseName = baseOf(loaded[0].name);
+  selected = new Set(); anchorId = null;
+  focusId = pages.length ? pages[0].id : null;
+  csvRules = []; csvFileName = '';
+  lastSaveName = null; thumbCache.clear();
+  history = []; historyIndex = -1; savedKey = snapshotPages();
+  pushHistory();
+  renderBoard();
+  for (const s of oldSources) { try { await s.pdfjsDoc.destroy(); } catch (e) {} }
+  setBusy(false);
+  if (sorted.length > 1) toast(`${sorted.length}ファイル・${pages.length}ページを開きました`, 'success');
+  else toast('PDFを開きました', 'success');
+  if (pages.length > 100) toast('100ページを超えるPDFです。動作が重くなる場合があります', 'warn', true);
 }
 
-/* 指定位置にPDF群を挿入（一括検証し、1件でも失敗したら何も追加しない／Undoは1回分／選択・基準ファイルは不変） */
+/* 互換ラッパー（単一ファイルを開く） */
+async function openNewPdf(file) {
+  return openPdfBatch([file]);
+}
+
+/* 指定位置にPDF群を挿入（一括検証し、1件でも失敗したら何も追加しない／Undoは1回分／選択・基準ファイルは不変）。
+   バッチ内はファイル名の自然順に並べてから挿入する（既存ページの順序は変えない） */
 async function insertPdfs(files, atIndex) {
+  files = sortFilesByName(files);
   const at = Math.max(0, Math.min(atIndex, pages.length));
   const beforeCount = pages.length;
   setBusy(true, '追加するPDFを確認中…');
@@ -472,12 +507,13 @@ async function handleIncomingFiles(fileList) {
   const files = [...fileList];
   if (!files.length) return;
   if (files.some((f) => !isPdfFile(f))) {
-    toast('PDF以外のファイルが含まれているため追加できませんでした', 'error');
+    toast(pages.length === 0
+      ? 'PDF以外のファイルが含まれているため開けませんでした'
+      : 'PDF以外のファイルが含まれているため追加できませんでした', 'error');
     return;
   }
   if (pages.length === 0) {
-    if (files.length > 1) toast('複数のPDFがドロップされたため、最初の1ファイルのみ開きます', 'warn', true);
-    await openNewPdf(files[0]);
+    await openPdfBatch(files);
   } else {
     await appendPdfs(files);
   }
@@ -1051,10 +1087,7 @@ els.btnOpenEmpty.addEventListener('click', requestOpen);
 els.fileInput.addEventListener('change', () => {
   const files = [...els.fileInput.files];
   els.fileInput.value = '';
-  if (!files.length) return;
-  const pdfs = files.filter(isPdfFile);
-  if (!pdfs.length) { toast('PDF以外のファイルは開けません', 'error'); return; }
-  openNewPdf(pdfs[0]);
+  if (files.length) openPdfBatch(files);
 });
 
 /* ---------- キーボードショートカット ---------- */
